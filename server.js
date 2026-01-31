@@ -26,12 +26,25 @@ app.post('/analyze', async (req, res) => {
         // Launch browser
         browser = await puppeteer.launch({
             headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage', // critical for docker/render
+                '--disable-gpu'
+            ],
             defaultViewport: { width: 1440, height: 900 }
         });
 
         const page = await browser.newPage();
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+
+        // Set User Agent to look like a real browser
+        await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+
+        // Optimize navigation: Don't wait for every network connection (ads/analytics)
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+        // Small buffer to ensure styles are applied if they rely on JS
+        await new Promise(r => setTimeout(r, 2000));
 
         // 1. DATA EXTRACTION IN BROWSER CONTEXT
         const data = await page.evaluate(() => {
@@ -177,9 +190,9 @@ app.post('/analyze', async (req, res) => {
         };
 
         try {
-            console.log("Environment Keys Check:", { 
-                google: !!process.env.GOOGLE_API_KEY, 
-                openai: !!process.env.OPENAI_API_KEY 
+            console.log("Environment Keys Check:", {
+                google: !!process.env.GOOGLE_API_KEY,
+                openai: !!process.env.OPENAI_API_KEY
             });
 
             if (process.env.GOOGLE_API_KEY) {
@@ -200,7 +213,7 @@ app.post('/analyze', async (req, res) => {
                 const response = await result.response;
                 const text = response.text();
                 console.log("Raw LLM Response:", text); // Debug log
-                
+
                 // Clean markdown json
                 const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
                 vibeAnalysis = JSON.parse(cleaned);
@@ -214,9 +227,11 @@ app.post('/analyze', async (req, res) => {
                 const completion = await openai.chat.completions.create({
                     messages: [
                         { role: "system", content: "You are a design expert focused on UI/UX aesthetics." },
-                        { role: "user", content: `Analyze the vibe of this text. Return JSON: { "tone": "...", "audience": "...", "vibe": "..." }. 
+                        {
+                            role: "user", content: `Analyze the vibe of this text. Return JSON: { "tone": "...", "audience": "...", "vibe": "..." }. 
                         Summary instructions: Describe the visual style, UI aesthetics, and design vibe. Do NOT describe what the company sells/offers, focus ONLY on the look and feel.
-                        Text: ${data.rawText}` }
+                        Text: ${data.rawText}`
+                        }
                     ],
                     model: "gpt-3.5-turbo",
                     response_format: { type: "json_object" }
